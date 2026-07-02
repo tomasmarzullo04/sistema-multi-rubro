@@ -240,6 +240,8 @@ prisma.$use(async (params, next) => {
 
 **Regla dura:** ninguna query bypasea RLS excepto trabajos del propio staff de la plataforma (usando un rol de Postgres separado con `BYPASSRLS`).
 
+> **Corrección (ver `docs/adr/000-correccion-set-local-parametrizado.md` y `docs/adr/003-tenant-context-helper.md`):** el ejemplo de middleware anterior queda **superado**. `$executeRawUnsafe` con interpolación de string es un vector de SQL injection y viola la regla dura #2 de `CLAUDE.md`. La implementación real usa `$executeRaw` parametrizado + validación Zod del `tenantId` como CUID, envuelto en `prisma.$transaction()` dentro del helper `withTenantContext` de `packages/tenant-context`, para garantizar que el `SET LOCAL` y las queries subsiguientes corran en la misma conexión física bajo pooling serverless (Neon/PgBouncer). El `PrismaClient` crudo no se exporta desde `packages/db`.
+
 ### 4.4 Dominios custom (Fase 3+)
 
 Cuando un tenant quiera usar `sistema.suempresa.com`:
@@ -813,12 +815,14 @@ model AuditLog {
 
 Turborepo + pnpm workspaces.
 
+> **Nota (ver `docs/adr/001-single-nextjs-app.md`):** para Fase 0-2, `apps/web` es la **única** app Next.js del monorepo. Sirve landing, admin y la app de tenant mediante route groups (`(marketing)`, `(admin)`, `(app)`) resueltos por `middleware.ts` según subdominio. `apps/landing` y `apps/admin` como apps Next.js separadas quedan diferidas a Fase 3+, cuando haya una razón concreta (equipos/deploys independientes) que justifique la separación.
+
 ```
 mi-proyecto/
 ├── apps/
-│   ├── web/                    # App principal (Next.js)
-│   ├── landing/                # Landing pública + registro (Next.js separado)
-│   ├── admin/                  # Panel de administración interno
+│   ├── web/                    # App principal (Next.js) — única app en Fase 0-2, ver ADR-001
+│   ├── landing/                # Diferido a Fase 3+ (ADR-001)
+│   ├── admin/                  # Diferido a Fase 3+ (ADR-001)
 │   └── docs/                   # Documentación técnica (Fumadocs)
 │
 ├── packages/
