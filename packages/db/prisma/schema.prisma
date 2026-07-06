@@ -1,0 +1,234 @@
+// Schema base de la plataforma (docs/ARCHITECTURE.md, sección 8).
+// Los módulos agregan sus propias tablas siguiendo el mismo patrón:
+// toda tabla con datos de tenant lleva `tenantId` + política RLS.
+//
+// Las políticas RLS y el test de aislamiento se agregan en el ítem 3 del
+// roadmap (ver docs/adr/003-tenant-context-helper.md).
+
+generator client {
+  provider        = "prisma-client-js"
+  output          = "../generated/client"
+  previewFeatures = ["postgresqlExtensions", "views"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [pgcrypto, citext]
+}
+
+// ============================================================
+// USERS
+// ============================================================
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique @db.Citext
+  emailVerified DateTime?
+  name          String?
+  avatarUrl     String?
+  passwordHash  String? // Null si usa OAuth/magic link
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  memberships Membership[]
+  sessions    Session[]
+
+  @@index([email])
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// ============================================================
+// TENANTS
+// ============================================================
+
+model Tenant {
+  id        String       @id @default(cuid())
+  slug      String       @unique
+  name      String
+  industry  String? // 'kinesiologia' | 'retail' | ... (no enum para flexibilidad, ver ADR-002)
+  status    TenantStatus @default(ACTIVE)
+  branding  Json         @default("{}")
+  settings  Json         @default("{}")
+  planId    String?
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  memberships    Membership[]
+  moduleInstalls ModuleInstall[]
+  domains        TenantDomain[]
+  plan           Plan?           @relation(fields: [planId], references: [id])
+
+  @@index([slug])
+}
+
+enum TenantStatus {
+  ACTIVE
+  SUSPENDED
+  TRIAL
+  CANCELLED
+}
+
+model TenantDomain {
+  id        String   @id @default(cuid())
+  tenantId  String
+  domain    String   @unique
+  verified  Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+// ============================================================
+// MEMBERSHIPS (usuario ↔ tenant)
+// ============================================================
+
+model Membership {
+  id        String           @id @default(cuid())
+  userId    String
+  tenantId  String
+  roleId    String
+  status    MembershipStatus @default(ACTIVE)
+  invitedAt DateTime?
+  joinedAt  DateTime?
+  createdAt DateTime         @default(now())
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  role   Role   @relation(fields: [roleId], references: [id])
+
+  @@unique([userId, tenantId])
+  @@index([tenantId])
+}
+
+enum MembershipStatus {
+  INVITED
+  ACTIVE
+  SUSPENDED
+  REMOVED
+}
+
+// ============================================================
+// ROLES & PERMISSIONS
+// ============================================================
+
+model Role {
+  id          String   @id @default(cuid())
+  tenantId    String? // null = rol global (Owner, Admin, etc)
+  key         String // 'owner' | 'admin' | ... o custom
+  name        String
+  description String?
+  isSystem    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  permissions RolePermission[]
+  memberships Membership[]
+
+  @@unique([tenantId, key])
+}
+
+model Permission {
+  id          String  @id @default(cuid())
+  key         String  @unique // 'crm:contacts.read'
+  module      String // 'crm'
+  resource    String // 'contacts'
+  action      String // 'read'
+  description String?
+
+  roles RolePermission[]
+}
+
+model RolePermission {
+  roleId       String
+  permissionId String
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+}
+
+// ============================================================
+// MODULES (instalados por tenant)
+// ============================================================
+
+model ModuleInstall {
+  id          String       @id @default(cuid())
+  tenantId    String
+  moduleId    String // 'crm', 'stock', etc.
+  version     String
+  status      ModuleStatus @default(ACTIVE)
+  config      Json         @default("{}")
+  installedAt DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, moduleId])
+  @@index([tenantId])
+}
+
+enum ModuleStatus {
+  ACTIVE
+  SUSPENDED
+  UNINSTALLING
+}
+
+// ============================================================
+// BILLING
+// ============================================================
+
+model Plan {
+  id              String   @id @default(cuid())
+  key             String   @unique // 'free' | 'starter' | 'pro'
+  name            String
+  monthlyPriceUSD Decimal  @db.Decimal(10, 2)
+  maxUsers        Int
+  includedModules String[] @default([])
+  features        Json     @default("{}")
+
+  tenants Tenant[]
+}
+
+model Subscription {
+  id               String   @id @default(cuid())
+  tenantId         String   @unique
+  planId           String
+  status           String
+  stripeSubId      String?  @unique
+  currentPeriodEnd DateTime
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}
+
+// ============================================================
+// AUDIT LOG
+// ============================================================
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  tenantId   String
+  userId     String?
+  action     String // 'crm.contact.created'
+  entityType String?
+  entityId   String?
+  metadata   Json     @default("{}")
+  ipAddress  String?
+  createdAt  DateTime @default(now())
+
+  @@index([tenantId, createdAt])
+  @@index([userId])
+}
