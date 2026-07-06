@@ -11,6 +11,7 @@ export type {
   ModuleInstall,
   Permission,
   Plan,
+  RlsProbe,
   Role,
   RolePermission,
   Session,

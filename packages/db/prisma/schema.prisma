@@ -13,7 +13,10 @@ generator client {
 
 datasource db {
   provider   = "postgresql"
+  // Runtime: rol `app`, SIN BYPASSRLS — las políticas RLS aplican siempre.
   url        = env("DATABASE_URL")
+  // Migraciones/CLI: rol `postgres` (superusuario). Ver docs/adr/004-rol-app-sin-bypassrls.md.
+  directUrl  = env("DIRECT_DATABASE_URL")
   extensions = [pgcrypto, citext]
 }
 
@@ -212,6 +215,21 @@ model Subscription {
   currentPeriodEnd DateTime
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
+}
+
+// ============================================================
+// RLS PROBE (solo Fase 0)
+// ============================================================
+
+// Tabla dummy para el test de aislamiento RLS (roadmap Fase 0, ítem 3).
+// Se elimina cuando exista la primera tabla real de módulo con RLS.
+model RlsProbe {
+  id        String   @id @default(cuid())
+  tenantId  String
+  note      String
+  createdAt DateTime @default(now())
+
+  @@index([tenantId])
 }
 
 // ============================================================
